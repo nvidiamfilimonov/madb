@@ -194,85 +194,78 @@ namespace SharpAdbClient
         }
 
         /// <summary>
-        /// Monitors the devices. This connects to the Debug Bridge
+        /// Monitors the status of the Android devices connected to the PC by listening to ADB updates posted to <see cref="Socket"/>
+        /// An unhandled exception thrown from this methods kills a thread assosiated with <see cref="DeviceMonitor.monitorTask"/>
         /// </summary>
         private async Task DeviceMonitorLoopAsync(CancellationToken cancellationToken)
         {
-            this.IsRunning = true;
-
-            // Set up the connection to track the list of devices.
-            this.InitializeSocket();
-
-            do
+            try
             {
-                try
+                this.IsRunning = true;
+
+                // Set up the connection to track the list of devices.
+                this.InitializeSocket();
+
+                do
                 {
                     var value = await this.Socket.ReadStringAsync(cancellationToken).ConfigureAwait(false);
                     this.ProcessIncomingDeviceData(value);
 
                     this.firstDeviceListParsed.Set();
                 }
-                catch (TaskCanceledException ex)
+                while (!cancellationToken.IsCancellationRequested) ;
+            }
+            catch (TaskCanceledException ex)
+            {
+                // We get a TaskCanceledException on Windows
+                if (cancellationToken.IsCancellationRequested)
                 {
-                    // We get a TaskCanceledException on Windows
-                    if (cancellationToken.IsCancellationRequested)
-                    {
-                        // The DeviceMonitor is shutting down (disposing) and Dispose()
-                        // has called cancellationToken.Cancel(). This exception is expected,
-                        // so we can safely swallow it.
-                    }
-                    else
-                    {
-                        // The exception was unexpected, so log it & rethrow.
-                        Log.Error(Tag, ex);
-                        throw;
-                    }
+                    // The DeviceMonitor is shutting down (disposing) and Dispose()
+                    // has called cancellationToken.Cancel(). This exception is expected,
+                    // so we can safely swallow it.
                 }
-                catch (ObjectDisposedException ex)
-                {
-                    // ... but an ObjectDisposedException on .NET Core on Linux and macOS.
-                    if (cancellationToken.IsCancellationRequested)
-                    {
-                        // The DeviceMonitor is shutting down (disposing) and Dispose()
-                        // has called cancellationToken.Cancel(). This exception is expected,
-                        // so we can safely swallow it.
-                    }
-                    else
-                    {
-                        // The exception was unexpected, so log it & rethrow.
-                        Log.Error(Tag, ex);
-                        throw;
-                    }
-                }
-                catch (AdbException adbException)
-                {
-                    if (adbException.ConnectionReset)
-                    {
-                        // The adb server was killed, for whatever reason. Try to restart it and recover from this.
-                        AdbServer.Instance.RestartServer();
-                        this.Socket.Reconnect();
-                        this.InitializeSocket();
-                    }
-                    else
-                    {
-                        throw;
-                    }
-                }
-                catch (Exception ex)
+                else
                 {
                     // The exception was unexpected, so log it & rethrow.
                     Log.Error(Tag, ex);
                     throw;
                 }
             }
-            while (!cancellationToken.IsCancellationRequested);
+            catch (ObjectDisposedException ex)
+            {
+                // ... but an ObjectDisposedException on .NET Core on Linux and macOS.
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    // The DeviceMonitor is shutting down (disposing) and Dispose()
+                    // has called cancellationToken.Cancel(). This exception is expected,
+                    // so we can safely swallow it.
+                }
+                else
+                {
+                    // The exception was unexpected, so log it & rethrow.
+                    Log.Error(Tag, ex);
+                    throw;
+                }
+            }
+            catch (Exception ex)
+            {
+                // The exception was unexpected, so log it & rethrow.
+                Log.Error(Tag, ex);
+                throw;
+            }
+            finally
+            {
+                IsRunning = false;
+                this.firstDeviceListParsed.Set();
+            }
+
         }
 
-        private void InitializeSocket()
+        private AdbResponse InitializeSocket()
         {
             // Set up the connection to track the list of devices.
             this.Socket.SendAdbRequest("host:track-devices");
-            this.Socket.ReadAdbResponse();
+            return this.Socket.ReadAdbResponse();
         }
 
         /// <summary>
